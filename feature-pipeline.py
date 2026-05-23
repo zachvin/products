@@ -71,8 +71,11 @@ _meta_schema = StructType([
     StructField("description",   ArrayType(StringType()),   True),
     StructField("categories",    ArrayType(StringType()),   True),
 ])
+item_ids = all_interactions.select("item_id").distinct()
+
 metadata = (
     spark.read.schema(_meta_schema).json("./data/meta_Cell_Phones_and_Accessories.jsonl")
+    .join(item_ids, on=F.col("parent_asin") == F.col("item_id"), how="inner")
     .select(
         "parent_asin",
         "main_category",
@@ -123,7 +126,7 @@ interactions = (
 # Normalise price to a numeric column on the metadata side
 metadata = metadata.withColumn(
     "price_numeric",
-    F.regexp_replace(F.col("price"), "[^0-9.]", "").cast("float"),
+    F.regexp_replace(F.col("price"), "[^0-9.]", "").try_cast("float"),
 )
 
 # ---------------------------------------------------------------------------
@@ -219,7 +222,7 @@ rating_features = rating_features.withColumn(
     F.when(
         F.col("total_purchases") > 1,
         F.col("days_active") / (F.col("total_purchases") - 1),
-    ).otherwise(F.lit(None).cast("float")),
+    ).otherwise(F.lit(None).try_cast("float")),
 )
 
 # ---------------------------------------------------------------------------
