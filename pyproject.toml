@@ -16,7 +16,8 @@ dependencies = [
     "datasets (>=4.8.5,<5.0.0)",
     "notebook (>=7.5.6,<8.0.0)",
     "faiss-cpu (>=1.14.2,<2.0.0)",
-    "sentence-transformers (>=5.5.1,<6.0.0)"
+    "sentence-transformers (>=5.5.1,<6.0.0)",
+    "rank-bm25 (>=0.2.2,<0.3.0)"
 ]
 
 [tool.poetry]
@@ -25,3 +26,8 @@ package-mode = false
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.0.3,<10.0.0)"
+]
