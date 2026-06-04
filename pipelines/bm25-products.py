@@ -17,7 +17,7 @@ import pickle
 import pandas as pd
 from rank_bm25 import BM25Okapi
 
-METADATA_PATH  = "./data/metadata.parquet"
+METADATA_PATH  = "./data/processed/metadata.parquet"
 INDEX_MAP_PATH = "./feature_store/product_index_map.parquet"
 BM25_PATH      = "./feature_store/product_bm25.pkl"
 

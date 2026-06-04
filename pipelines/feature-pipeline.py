@@ -41,9 +41,9 @@ spark = (
 spark.sparkContext.setLogLevel("WARN")
 
 # Open train/valid/test CSV files
-train = spark.read.option("header", True).option("inferSchema", True).csv("data/Cell_Phones_and_Accessories.train.csv")
-valid = spark.read.option("header", True).option("inferSchema", True).csv("data/Cell_Phones_and_Accessories.valid.csv")
-test  = spark.read.option("header", True).option("inferSchema", True).csv("data/Cell_Phones_and_Accessories.test.csv")
+train = spark.read.option("header", True).option("inferSchema", True).csv("data/raw/Cell_Phones_and_Accessories.train.csv")
+valid = spark.read.option("header", True).option("inferSchema", True).csv("data/raw/Cell_Phones_and_Accessories.valid.csv")
+test  = spark.read.option("header", True).option("inferSchema", True).csv("data/raw/Cell_Phones_and_Accessories.test.csv")
 
 # Rename parent_asin to item_id
 train = train.withColumnRenamed("parent_asin", "item_id")
@@ -51,13 +51,13 @@ valid = valid.withColumnRenamed("parent_asin", "item_id")
 test  = test.withColumnRenamed("parent_asin", "item_id")
 
 # Save each split as Parquet
-train.write.mode("overwrite").parquet("./data/train.parquet")
-valid.write.mode("overwrite").parquet("./data/valid.parquet")
-test.write.mode("overwrite").parquet("./data/test.parquet")
+train.write.mode("overwrite").parquet("./data/processed/train.parquet")
+valid.write.mode("overwrite").parquet("./data/processed/valid.parquet")
+test.write.mode("overwrite").parquet("./data/processed/test.parquet")
 
 # Combine all three for the feature pipeline
 all_interactions = train.union(valid).union(test)
-all_interactions.write.mode("overwrite").parquet("./data/interactions.parquet")
+all_interactions.write.mode("overwrite").parquet("./data/processed/interactions.parquet")
 
 # Save metadata json file
 # Explicit schema avoids schema-inference errors caused by duplicate-cased keys
@@ -74,7 +74,7 @@ _meta_schema = StructType([
 item_ids = all_interactions.select("item_id").distinct()
 
 metadata = (
-    spark.read.schema(_meta_schema).json("./data/meta_Cell_Phones_and_Accessories.jsonl")
+    spark.read.schema(_meta_schema).json("./data/raw/meta_Cell_Phones_and_Accessories.jsonl")
     .join(item_ids, on=F.col("parent_asin") == F.col("item_id"), how="inner")
     .select(
         "parent_asin",
@@ -88,7 +88,7 @@ metadata = (
     )
 )
 
-metadata.write.mode("overwrite").parquet("./data/metadata.parquet")
+metadata.write.mode("overwrite").parquet("./data/processed/metadata.parquet")
 
 # ---------------------------------------------------------------------------
 # 2. Load data
@@ -96,8 +96,8 @@ metadata.write.mode("overwrite").parquet("./data/metadata.parquet")
 #    Parquet files.  Adjust paths if yours differ.
 # ---------------------------------------------------------------------------
 
-INTERACTIONS_PATH = "./data/interactions.parquet"
-METADATA_PATH     = "./data/metadata.parquet"
+INTERACTIONS_PATH = "./data/processed/interactions.parquet"
+METADATA_PATH     = "./data/processed/metadata.parquet"
 FEATURE_STORE     = "./feature_store"
 
 print("Loading interactions...")

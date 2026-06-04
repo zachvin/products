@@ -2,5 +2,8 @@ training/checkpoints
 data
 feature_store
 mlflow
-models/__pycache__
+__pycache__/
+api/__pycache__
 search
+*.db
+.vscode

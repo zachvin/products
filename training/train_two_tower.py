@@ -35,7 +35,7 @@ from models.two_tower import TwoTowerModel
 _ROOT       = Path(__file__).parent.parent
 _DATA_PATH  = _ROOT / "data" / "processed" / "interactions.parquet"
 _CKPT_DIR   = _ROOT / "training" / "checkpoints"
-_MLFLOW_URI = _ROOT / "mlflow"
+_MLFLOW_URI = "sqlite:///" + str(_ROOT / "mlflow.db")
 
 # ---------------------------------------------------------------------------
 # Defaults (overridable via CLI)
@@ -164,7 +164,7 @@ def main() -> None:
     )
 
     # --- MLflow ---
-    mlflow.set_tracking_uri(_MLFLOW_URI.as_uri())
+    mlflow.set_tracking_uri(_MLFLOW_URI)
     mlflow.set_experiment("two-tower")
 
     _CKPT_DIR.mkdir(parents=True, exist_ok=True)

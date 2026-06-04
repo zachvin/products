@@ -17,7 +17,7 @@ import pandas as pd
 import faiss
 from sentence_transformers import SentenceTransformer
 
-METADATA_PATH   = "./data/metadata.parquet"
+METADATA_PATH   = "./data/processed/metadata.parquet"
 FEATURE_STORE   = "./feature_store"
 INDEX_PATH      = os.path.join(FEATURE_STORE, "product_faiss.index")
 INDEX_MAP_PATH  = os.path.join(FEATURE_STORE, "product_index_map.parquet")
