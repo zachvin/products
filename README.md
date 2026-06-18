@@ -32,4 +32,4 @@ Once the feature pipeline is built, the products are transformed into vector emb
 
 # Next steps
 
-As with any AI-native project, the code needs to be reviewed and tweaked to be its most efficient. The overall structure fits together, but legacy code and folder structure needs to be improved. The data loading must be optimized to reduce the amount of data sent through the API and minimize the amount of compute required to serve the models. I am presently completing these tasks.
+As with any AI-native project, the code needs to be reviewed and tweaked to be its most efficient. Although I prioritized learning over production speed, I still need to take more steps to understand the lower-level components of this code so I can maintain architectural ownership. The overall structure fits together, but legacy code and folder structure needs to be improved. The data loading must be optimized to reduce the amount of data sent through the API and minimize the amount of compute required to serve the models. I am presently completing these tasks.
