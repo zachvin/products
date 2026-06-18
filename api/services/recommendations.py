@@ -154,7 +154,7 @@ def load() -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_recommendations(user_id: str, k: int = 10) -> list[dict]:
+def get_recommendations(user_id: str, k: int = 10, use_linucb: bool = True) -> list[dict]:
     """
     Return the top-k recommended items for a user.
 
@@ -181,8 +181,8 @@ def get_recommendations(user_id: str, k: int = 10) -> list[dict]:
         if (p + 1) in _item_dec
     ]
 
-    # Re-rank with LinUCB when available
-    if _linucb is not None and user_id in _user_feat.index:
+    # Re-rank with LinUCB when available and requested
+    if use_linucb and _linucb is not None and user_id in _user_feat.index:
         user_row  = _user_feat.loc[user_id, _USER_FEAT_COLS].fillna(0.0).to_numpy(np.float64)
         item_rows = (
             _item_feat.reindex(candidate_asins)[_ITEM_FEAT_COLS]
