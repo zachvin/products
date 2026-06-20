@@ -11,7 +11,7 @@ Run:
     python feature_pipeline.py
 
 Requirements:
-    pip install pyspark delta-spark pandas pyarrow
+    pyspark delta-spark pandas pyarrow
 """
 
 from pyspark.sql import SparkSession, functions as F
@@ -19,10 +19,7 @@ from pyspark.sql import Window
 from pyspark.sql.types import StringType, StructType, StructField, ArrayType
 import os
 
-# ---------------------------------------------------------------------------
-# 1. Spark session with Delta Lake support
-# ---------------------------------------------------------------------------
-
+# Spark session with Delta Lake support
 spark = (
     SparkSession.builder
     .appName("feature-pipeline")
@@ -32,7 +29,7 @@ spark = (
         "spark.sql.catalog.spark_catalog",
         "org.apache.spark.sql.delta.catalog.DeltaCatalog",
     )
-    # Keep memory reasonable for a laptop
+
     .config("spark.driver.memory", "4g")
     .config("spark.sql.shuffle.partitions", "8")
     .getOrCreate()
@@ -60,8 +57,7 @@ all_interactions = train.union(valid).union(test)
 all_interactions.write.mode("overwrite").parquet("./data/processed/interactions.parquet")
 
 # Save metadata json file
-# Explicit schema avoids schema-inference errors caused by duplicate-cased keys
-# in the `details` field (e.g. "Assembly Required" vs "assembly required").
+# Explicit schema to skip "details" data, which would create duplicate columns
 _meta_schema = StructType([
     StructField("parent_asin",   StringType(),              True),
     StructField("main_category", StringType(),              True),
@@ -73,6 +69,7 @@ _meta_schema = StructType([
 ])
 item_ids = all_interactions.select("item_id").distinct()
 
+# Attach product metadata for all items for which there are reviews
 metadata = (
     spark.read.schema(_meta_schema).json("./data/raw/meta_Cell_Phones_and_Accessories.jsonl")
     .join(item_ids, on=F.col("parent_asin") == F.col("item_id"), how="inner")
@@ -88,14 +85,10 @@ metadata = (
     )
 )
 
+# This should upsert in a production system
 metadata.write.mode("overwrite").parquet("./data/processed/metadata.parquet")
 
-# ---------------------------------------------------------------------------
-# 2. Load data
-#    Assumes you have already saved filtered interactions and metadata as
-#    Parquet files.  Adjust paths if yours differ.
-# ---------------------------------------------------------------------------
-
+# Load new Parquet data
 INTERACTIONS_PATH = "./data/processed/interactions.parquet"
 METADATA_PATH     = "./data/processed/metadata.parquet"
 FEATURE_STORE     = "./feature_store"
@@ -111,9 +104,6 @@ metadata = spark.read.parquet(METADATA_PATH)
 # Expected columns: parent_asin (string), main_category (string),
 #                   title (string), price (string)
 
-# ---------------------------------------------------------------------------
-# 3. Basic cleaning
-# ---------------------------------------------------------------------------
 # Shouldn't be necessary, but will include basic cleaning anyway
 interactions = (
     interactions
@@ -123,28 +113,22 @@ interactions = (
     .filter(F.col("timestamp").isNotNull())
 )
 
-# Normalise price to a numeric column on the metadata side
+# Normalize price to a numeric column on the metadata side
 metadata = metadata.withColumn(
     "price_numeric",
     F.regexp_replace(F.col("price"), "[^0-9.]", "").try_cast("float"),
 )
 
-# ---------------------------------------------------------------------------
-# 4. Enrich interactions with category from metadata
-# ---------------------------------------------------------------------------
-
+# Add main category and price to interactions
 interactions_enriched = interactions.join(
     metadata.select("parent_asin", "main_category", "price_numeric"),
     interactions["item_id"] == metadata["parent_asin"],
     how="left",
 )
 
-# ---------------------------------------------------------------------------
-# 5. Session features
-#    A session = consecutive interactions by the same user with < 30-min gaps.
-# ---------------------------------------------------------------------------
 
-SESSION_GAP_SECONDS = 30 * 60  # 30 minutes
+# Session features to split consumer behavior into discrete groups of interactions
+SESSION_GAP_SECONDS = 30 * 60  # Session is 30 minutes
 
 user_time_window = Window.partitionBy("user_id").orderBy("timestamp")
 
@@ -156,7 +140,7 @@ interactions_with_sessions = (
         "gap_seconds",
         F.col("timestamp") - F.col("prev_ts"),
     )
-    # Flag the start of each new session
+    # Flag the start of each new session when time gap is large enough
     .withColumn(
         "is_new_session",
         F.when(
@@ -164,14 +148,14 @@ interactions_with_sessions = (
             1,
         ).otherwise(0),
     )
-    # Assign a session ID = cumulative sum of session-start flags
+    # Cumulative sum of session-start flags for session ID
     .withColumn(
         "session_id",
         F.sum("is_new_session").over(user_time_window),
     )
 )
 
-# Aggregate to session level
+# Add session-level statistics
 session_agg = interactions_with_sessions.groupBy("user_id", "session_id").agg(
     F.count("*").alias("session_length"),
     F.avg("rating").alias("session_avg_rating"),
@@ -193,10 +177,7 @@ user_session_features = session_agg.groupBy("user_id").agg(
     F.max("session_duration_mins").alias("max_session_duration_mins"),
 )
 
-# ---------------------------------------------------------------------------
-# 6. Rating pattern features  (user level)
-# ---------------------------------------------------------------------------
-
+# User rating patterns
 rating_features = interactions_enriched.groupBy("user_id").agg(
     F.count("*").alias("total_purchases"),
     F.avg("rating").alias("avg_rating"),
@@ -225,10 +206,7 @@ rating_features = rating_features.withColumn(
     ).otherwise(F.lit(None).try_cast("float")),
 )
 
-# ---------------------------------------------------------------------------
-# 7. Category affinity  (user level)
-# ---------------------------------------------------------------------------
-
+# Category affinity
 # Count purchases per (user, category)
 category_counts = interactions_enriched.groupBy("user_id", "main_category").agg(
     F.count("*").alias("category_purchase_count")
@@ -257,10 +235,7 @@ price_sensitivity = interactions_enriched.groupBy("user_id").agg(
     F.max("price_numeric").alias("max_item_price"),
 )
 
-# ---------------------------------------------------------------------------
-# 8. Join all user features together
-# ---------------------------------------------------------------------------
-
+# Assemble all features
 print("Assembling user features...")
 
 user_features = (
@@ -283,10 +258,7 @@ for col in numeric_cols:
 
 user_features = user_features.fillna({"favorite_category": "unknown"})
 
-# ---------------------------------------------------------------------------
-# 9. Item features
-# ---------------------------------------------------------------------------
-
+# Item features
 print("Computing item features...")
 
 item_features = interactions_enriched.groupBy("item_id").agg(
@@ -317,10 +289,8 @@ item_features = item_features.join(
 
 item_features = item_features.fillna({"rating_stddev": 0.0, "price_numeric": 0.0})
 
-# ---------------------------------------------------------------------------
-# 10. Write to Delta Lake
-# ---------------------------------------------------------------------------
 
+# Write to Delta Lake
 user_out = os.path.join(FEATURE_STORE, "user_features")
 item_out = os.path.join(FEATURE_STORE, "item_features")
 
@@ -342,10 +312,8 @@ print(f"Writing item features to {item_out} ...")
     .save(item_out)
 )
 
-# ---------------------------------------------------------------------------
-# 11. Sanity checks
-# ---------------------------------------------------------------------------
 
+# Print basic info to check success
 print("\n=== User features sample ===")
 spark.read.format("delta").load(user_out).show(5, truncate=False)
 
