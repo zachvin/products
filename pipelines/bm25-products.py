@@ -8,8 +8,8 @@ either index maps to the same parent_asin via product_index_map.parquet.
 Writes:
     ./feature_store/product_bm25.pkl  - pickled BM25Okapi object
 
-Run:
-    python bm25-products.py
+Run (from the repo root):
+    poetry run python pipelines/bm25-products.py
 """
 
 import os
@@ -51,12 +51,15 @@ if len(ordered) != len(index_map):
 # 3. Build tokenised corpus in FAISS row order
 # ---------------------------------------------------------------------------
 
-def build_text(row: pd.Series) -> str:
-    parts = [row["title"] or "", row["features"] or "", row["description"] or ""]
+def build_text(title, features, description) -> str:
+    parts = [title or "", features or "", description or ""]
     return ". ".join(p.strip() for p in parts if p.strip())
 
 print("Building corpus...")
-corpus = [build_text(row).lower().split() for _, row in ordered.iterrows()]
+corpus = [
+    build_text(*fields).lower().split()
+    for fields in zip(ordered["title"], ordered["features"], ordered["description"])
+]
 
 # ---------------------------------------------------------------------------
 # 4. Fit BM25

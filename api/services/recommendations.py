@@ -4,7 +4,7 @@ Recommendation service.
 Startup sequence (runs once on first request):
   1. Load the best two-tower checkpoint — model weights + user/item encoders.
   2. Encode every item with the item tower and build an in-memory FAISS index.
-  3. Read user_features and item_features from the Delta Lake parquet directories.
+  3. Read user_features and item_features from the Delta Lake tables.
   4. Load LinUCB from disk if a saved model exists.
 
 Request sequence for get_recommendations:
@@ -23,6 +23,7 @@ import faiss
 import numpy as np
 import pandas as pd
 import torch
+from deltalake import DeltaTable
 
 from models.linucb import LinUCB
 from models.two_tower import TwoTowerModel
@@ -38,14 +39,14 @@ _LINUCB_PATH   = _FEATURE_STORE / "linucb.pkl"
 # Categorical columns (favorite_category, main_category) and raw timestamps
 # are intentionally excluded.
 _USER_FEAT_COLS: list[str] = [
-    "total_purchases", "avg_rating", "rating_stddev", "high_rating_count",
+    "total_reviews", "avg_rating", "rating_stddev", "high_rating_count",
     "low_rating_count", "days_since_last_purchase", "days_active",
     "purchase_frequency", "distinct_categories", "avg_item_price",
     "max_item_price", "total_sessions", "avg_session_length",
     "max_session_length", "avg_session_duration_mins", "max_session_duration_mins",
 ]
 _ITEM_FEAT_COLS: list[str] = [
-    "total_purchases", "unique_buyers", "avg_rating", "rating_stddev",
+    "total_reviews", "unique_buyers", "avg_rating", "rating_stddev",
     "rating_count", "high_rating_count", "days_since_last_purchased", "price_numeric",
 ]
 _LINUCB_DIM = len(_USER_FEAT_COLS) + len(_ITEM_FEAT_COLS)  # 24
@@ -62,6 +63,7 @@ _loaded    = False
 _model:     TwoTowerModel | None = None
 _device:    torch.device   | None = None
 _user_enc:  dict[str, int] | None = None   # user_id → int index
+_item_enc:  dict[str, int] | None = None   # parent_asin → int index
 _item_dec:  dict[int, str] | None = None   # int index → parent_asin
 _faiss_idx: faiss.Index    | None = None
 _linucb:    LinUCB         | None = None
@@ -75,7 +77,7 @@ _item_feat: pd.DataFrame   | None = None   # indexed by item_id (= parent_asin)
 
 def load() -> None:
     """Load all models and feature tables into memory. Safe to call repeatedly."""
-    global _loaded, _model, _device, _user_enc, _item_dec
+    global _loaded, _model, _device, _user_enc, _item_enc, _item_dec
     global _faiss_idx, _linucb, _user_feat, _item_feat
 
     with _lock:
@@ -127,10 +129,10 @@ def load() -> None:
         faiss_idx.add(item_vecs)
         print(f"  {faiss_idx.ntotal:,} vectors indexed")
 
-        # --- Feature tables (read parquet directories directly) ---
+        # --- Feature tables (read through the Delta log so overwritten files are ignored) ---
         print("Loading feature tables...")
-        user_feat = pd.read_parquet(_USER_FEAT_DIR).set_index("user_id")
-        item_feat = pd.read_parquet(_ITEM_FEAT_DIR).set_index("item_id")
+        user_feat = DeltaTable(str(_USER_FEAT_DIR)).to_pandas().set_index("user_id")
+        item_feat = DeltaTable(str(_ITEM_FEAT_DIR)).to_pandas().set_index("item_id")
 
         # --- LinUCB (optional) ---
         linucb = LinUCB.load(_LINUCB_PATH) if _LINUCB_PATH.exists() else None
@@ -142,6 +144,7 @@ def load() -> None:
         _model     = model
         _device    = device
         _user_enc  = user_enc
+        _item_enc  = item_enc
         _item_dec  = item_dec
         _faiss_idx = faiss_idx
         _linucb    = linucb
@@ -204,18 +207,26 @@ def record_feedback(user_id: str, parent_asin: str, reward: float) -> None:
 
     Initialises a fresh LinUCB model if none has been saved yet.
 
+    Items with no train-split interactions have no row in item_features; they
+    get an all-zero item context, matching how get_recommendations ranks them.
+
     Raises:
-        KeyError: if user_id or parent_asin is not in the feature store.
+        KeyError: if user_id is not in the feature store, or parent_asin is
+            unknown to both the feature store and the two-tower model.
     """
     load()
 
     if user_id not in _user_feat.index:
         raise KeyError(f"Unknown user_id: {user_id}")
-    if parent_asin not in _item_feat.index:
+    if parent_asin not in _item_feat.index and parent_asin not in _item_enc:
         raise KeyError(f"Unknown parent_asin: {parent_asin}")
 
     user_row = _user_feat.loc[user_id, _USER_FEAT_COLS].fillna(0.0).to_numpy(np.float64)
-    item_row = _item_feat.loc[parent_asin, _ITEM_FEAT_COLS].fillna(0.0).to_numpy(np.float64)
+    item_row = (
+        _item_feat.reindex([parent_asin])[_ITEM_FEAT_COLS]
+        .fillna(0.0)
+        .to_numpy(np.float64)[0]
+    )
 
     with _lock:
         global _linucb

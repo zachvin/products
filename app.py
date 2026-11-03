@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from deltalake import DeltaTable
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -31,8 +32,8 @@ st.set_page_config(
 
 @st.cache_data
 def load_users(top_n: int = 500) -> pd.DataFrame:
-    df = pd.read_parquet("feature_store/user_features")
-    return df.sort_values("total_purchases", ascending=False).head(top_n).reset_index(drop=True)
+    df = DeltaTable("feature_store/user_features").to_pandas()
+    return df.sort_values("total_reviews", ascending=False).head(top_n).reset_index(drop=True)
 
 
 @st.cache_data
@@ -42,7 +43,7 @@ def load_metadata() -> pd.DataFrame:
 
 @st.cache_data
 def load_item_features() -> pd.DataFrame:
-    return pd.read_parquet("feature_store/item_features").set_index("item_id")
+    return DeltaTable("feature_store/item_features").to_pandas().set_index("item_id")
 
 
 @st.cache_resource(show_spinner="Loading recommendation models…")
@@ -58,7 +59,7 @@ def enrich(asins: list[str]) -> list[dict]:
     """Attach display metadata and item stats to a list of ASINs."""
     rows = []
     for asin in asins:
-        row: dict = {"asin": asin, "title": asin, "price": None, "category": "", "rating": None, "rating_count": 0, "purchases": 0}
+        row: dict = {"asin": asin, "title": asin, "price": None, "category": "", "rating": None, "rating_count": 0}
         if asin in _meta.index:
             m = _meta.loc[asin]
             row["title"]    = m["title"] or asin
@@ -69,7 +70,6 @@ def enrich(asins: list[str]) -> list[dict]:
             if pd.notna(it["avg_rating"]):
                 row["rating"] = round(float(it["avg_rating"]), 1)
             row["rating_count"] = int(it["rating_count"]) if pd.notna(it["rating_count"]) else 0
-            row["purchases"]    = int(it["total_purchases"]) if pd.notna(it["total_purchases"]) else 0
         rows.append(row)
     return rows
 
@@ -88,8 +88,6 @@ def product_card(p: dict, user_id: str, key_prefix: str = "") -> None:
         if p["rating"]:
             stars = "★" * round(p["rating"]) + "☆" * (5 - round(p["rating"]))
             meta_parts.append(f"{stars} {p['rating']} ({p['rating_count']:,})")
-        if p["purchases"]:
-            meta_parts.append(f"🛒 {p['purchases']:,} bought")
 
         if meta_parts:
             st.markdown("  \n".join(meta_parts))
@@ -144,7 +142,7 @@ with st.sidebar:
     )
 
     u = _users[_users["user_id"] == selected_user].iloc[0]
-    st.caption(f"🛍️ **{int(u['total_purchases'])}** purchases")
+    st.caption(f"📝 **{int(u['total_reviews'])}** reviews")
     st.caption(f"⭐ Avg rating given: **{u['avg_rating']:.1f}**")
     st.caption(f"🏷️ Favourite: **{u['favorite_category'] or '—'}**")
     st.caption(f"📅 Days active: **{int(u['days_active'])}**")

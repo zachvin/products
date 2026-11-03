@@ -7,8 +7,8 @@ with a sentence-transformer model, builds a FAISS index, and writes:
     ./feature_store/product_faiss.index        - FAISS IndexFlatIP (cosine sim)
     ./feature_store/product_index_map.parquet  - maps FAISS row int → parent_asin
 
-Run:
-    python embed-products.py
+Run (from the repo root):
+    poetry run python pipelines/embed-products.py
 """
 
 import os

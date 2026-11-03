@@ -1,14 +1,15 @@
 """
 Feature Pipeline
 ================
-Reads raw interactions + item metadata, computes user and item features,
+Reads raw interactions + item metadata, computes user and item features from
+the train split only (so valid/test interactions never leak into features),
 and writes two Delta Lake tables:
 
     ./feature_store/user_features
     ./feature_store/item_features
 
-Run:
-    python feature_pipeline.py
+Run (from the repo root):
+    poetry run python pipelines/feature-pipeline.py
 
 Requirements:
     pyspark delta-spark pandas pyarrow
@@ -89,15 +90,17 @@ metadata = (
 metadata.write.mode("overwrite").parquet("./data/processed/metadata.parquet")
 
 # Load new Parquet data
-INTERACTIONS_PATH = "./data/processed/interactions.parquet"
-METADATA_PATH     = "./data/processed/metadata.parquet"
-FEATURE_STORE     = "./feature_store"
+# Features are built from the train split only; valid/test are held out for
+# evaluation and must not influence the features a model sees
+TRAIN_PATH    = "./data/processed/train.parquet"
+METADATA_PATH = "./data/processed/metadata.parquet"
+FEATURE_STORE = "./feature_store"
 
-print("Loading interactions...")
-interactions = spark.read.parquet(INTERACTIONS_PATH)
+print("Loading train interactions...")
+interactions = spark.read.parquet(TRAIN_PATH)
 # Expected columns: user_id (string), item_id (string),
-#                   rating (float), timestamp (long),
-#                   verified_purchase (boolean)
+#                   rating (float), timestamp (long, epoch milliseconds),
+#                   history (string)
 
 print("Loading metadata...")
 metadata = spark.read.parquet(METADATA_PATH)
@@ -111,6 +114,8 @@ interactions = (
     .filter(F.col("item_id").isNotNull())
     .filter(F.col("rating").between(1.0, 5.0))
     .filter(F.col("timestamp").isNotNull())
+    # Raw timestamps are epoch milliseconds; convert to seconds for all features below
+    .withColumn("timestamp", (F.col("timestamp") / 1000).cast("long"))
 )
 
 # Normalize price to a numeric column on the metadata side
@@ -179,7 +184,7 @@ user_session_features = session_agg.groupBy("user_id").agg(
 
 # User rating patterns
 rating_features = interactions_enriched.groupBy("user_id").agg(
-    F.count("*").alias("total_purchases"),
+    F.count("*").alias("total_reviews"),
     F.avg("rating").alias("avg_rating"),
     F.stddev("rating").alias("rating_stddev"),
     F.sum(F.when(F.col("rating") >= 4.0, 1).otherwise(0)).alias("high_rating_count"),
@@ -201,8 +206,8 @@ rating_features = rating_features.withColumn(
     "purchase_frequency",
     # avg days between purchases; guard against divide-by-zero
     F.when(
-        F.col("total_purchases") > 1,
-        F.col("days_active") / (F.col("total_purchases") - 1),
+        F.col("total_reviews") > 1,
+        F.col("days_active") / (F.col("total_reviews") - 1),
     ).otherwise(F.lit(None).try_cast("float")),
 )
 
@@ -213,13 +218,14 @@ category_counts = interactions_enriched.groupBy("user_id", "main_category").agg(
 )
 
 # Rank categories per user; take the top one
+# row_number (not rank) so ties yield exactly one row per user; category name breaks ties deterministically
 category_rank_window = Window.partitionBy("user_id").orderBy(
-    F.desc("category_purchase_count")
+    F.desc("category_purchase_count"), F.asc_nulls_last("main_category")
 )
 
 favorite_category = (
     category_counts
-    .withColumn("cat_rank", F.rank().over(category_rank_window))
+    .withColumn("cat_rank", F.row_number().over(category_rank_window))
     .filter(F.col("cat_rank") == 1)
     .select("user_id", F.col("main_category").alias("favorite_category"))
 )
@@ -262,7 +268,7 @@ user_features = user_features.fillna({"favorite_category": "unknown"})
 print("Computing item features...")
 
 item_features = interactions_enriched.groupBy("item_id").agg(
-    F.count("*").alias("total_purchases"),
+    F.count("*").alias("total_reviews"),
     F.countDistinct("user_id").alias("unique_buyers"),
     F.avg("rating").alias("avg_rating"),
     F.stddev("rating").alias("rating_stddev"),
